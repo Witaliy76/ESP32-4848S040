@@ -259,6 +259,7 @@ void Display::_buildPager(){
 }
 
 void Display::_apScreen() {
+  _suspendFlush = false;  // Разрешаем обновления экрана в AP режиме
   if(_boot) _pager.removePage(_boot);
   #ifndef DSP_LCD
     _boot = new Page();
@@ -283,6 +284,13 @@ void Display::_apScreen() {
     bootSett->setText(WiFi.softAPIP().toString().c_str(), apSettFmt);
     _pager.addPage(_boot);
     _pager.setPage(_boot);
+    
+    // Принудительно обновляем экран после создания AP screen
+    if(gfx) {
+      sdog.takeMutex();
+      gfxFlushScreen(gfx);
+      sdog.giveMutex();
+    }
   #else
     dsp.apScreen();
   #endif
@@ -294,6 +302,7 @@ void Display::_start() {
     nextion.wake();
   #endif
   if (network.status != CONNECTED && network.status != SDREADY) {
+    _suspendFlush = false; // разрешаем flush в AP режиме
     _apScreen();
     #ifdef USE_NEXTION
       nextion.apScreen();
