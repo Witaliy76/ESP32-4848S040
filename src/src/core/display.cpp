@@ -29,7 +29,7 @@ Page *pages[] = { new Page(), new Page(), new Page(), new Page() };
   #define CORE_STACK_SIZE  1024*3
 #endif
 #ifndef DSP_TASK_DELAY
-  #define DSP_TASK_DELAY  pdMS_TO_TICKS(5)
+  #define DSP_TASK_DELAY  pdMS_TO_TICKS(10)
 #endif
 #if !((DSP_MODEL==DSP_ST7735 && DTYPE==INITR_BLACKTAB) || DSP_MODEL==DSP_ST7789 || DSP_MODEL==DSP_ST7789_170 || DSP_MODEL==DSP_ST7796 || DSP_MODEL==DSP_ILI9488 || DSP_MODEL==DSP_ILI9486 || DSP_MODEL==DSP_ILI9341 || DSP_MODEL==DSP_ILI9225 || DSP_MODEL==DSP_AXS15231B || DSP_MODEL==DSP_ST7701)
   #undef  BITRATE_FULL
@@ -125,15 +125,6 @@ void Display::_bootScreen(){
     delay(1000);
   }
   
-  // Защита от повторного вызова
-  static bool bootScreenCreated = false;
-  if(bootScreenCreated) {
-    Serial.println("[Display] _bootScreen already created, skipping");
-    return;
-  }
-  bootScreenCreated = true;
-  
-  Serial.println("[Display] Creating boot screen");
   _boot = new Page();
   _boot->addWidget(new ProgressWidget(bootWdtConf, bootPrgConf, BOOT_PRG_COLOR, 0));
   _bootstring = (TextWidget*) &_boot->addWidget(new TextWidget(bootstrConf, 50, true, BOOT_TXT_COLOR, 0));
@@ -200,7 +191,7 @@ void Display::_buildPager(){
     _volbar = new SliderWidget(volbarConf, config.theme.volbarin, config.theme.background, 254, config.theme.volbarout);
   #endif
   #ifndef HIDE_HEAPBAR
-    _heapbar = new SliderWidget(heapbarConf, config.theme.buffer, config.theme.background, 655350);
+    _heapbar = new SliderWidget(heapbarConf, config.theme.buffer, config.theme.background, psramInit()?300000:1600 * 10);
   #endif
   #ifndef HIDE_VOL
     _voltxt = new TextWidget(voltxtConf, 10, false, config.theme.vol, config.theme.background);
@@ -268,8 +259,6 @@ void Display::_buildPager(){
 }
 
 void Display::_apScreen() {
-  Serial.println("[Display] _apScreen() called");
-  Serial.printf("[Display] _suspendFlush = %s\n", _suspendFlush ? "true" : "false");
   if(_boot) _pager.removePage(_boot);
   #ifndef DSP_LCD
     _boot = new Page();
@@ -293,36 +282,23 @@ void Display::_apScreen() {
     ScrollWidget *bootSett = (ScrollWidget*) &_boot->addWidget(new ScrollWidget("*", apSettConf, config.theme.title2, config.theme.background));
     bootSett->setText(WiFi.softAPIP().toString().c_str(), apSettFmt);
     _pager.addPage(_boot);
-    _pager.setPage(_boot, false);
-    
-    // Принудительно обновляем экран после создания AP screen
-    if(gfx) {
-      sdog.takeMutex();
-      gfxFlushScreen(gfx);
-      sdog.giveMutex();
-      Serial.println("[Display] AP screen flushed to display");
-    }
+    _pager.setPage(_boot);
   #else
     dsp.apScreen();
   #endif
 }
 
 void Display::_start() {
-  Serial.println("[Display] _start() called");
-  Serial.printf("[Display] network.status = %d\n", network.status);
   if(_boot) _pager.removePage(_boot);
   #ifdef USE_NEXTION
     nextion.wake();
   #endif
   if (network.status != CONNECTED && network.status != SDREADY) {
-    Serial.println("[Display] Going to AP mode");
     _apScreen();
     #ifdef USE_NEXTION
       nextion.apScreen();
     #endif
     _bootStep = 2;
-    _suspendFlush = false; // разрешаем flush в AP режиме
-    Serial.println("[Display] _bootStep set to 2 in AP mode");
     return;
   }
   #ifdef USE_NEXTION
@@ -412,8 +388,6 @@ void Display::_swichMode(displayMode_e newmode) {
     _pager.setPage( pages[PG_PLAYER]);
     config.setDspOn(config.store.dspon, false);
     pm.on_display_player();
-    // Восстанавливаем правильное состояние виджетов при возврате на страницу плейера
-    _layoutChange(player.isRunning());
   }
   if (newmode == SCREENSAVER || newmode == SCREENBLANK) {
     config.isScreensaver = true;
@@ -476,14 +450,6 @@ void Display::putRequest(displayRequestType_e type, int payload){
   requestParams_t request;
   request.type = type;
   request.payload = payload;
-  
-  // Для DSP_START используем блокирующую отправку
-  if(type == DSP_START) {
-    Serial.println("[Display] Sending DSP_START request");
-    xQueueSend(displayQueue, &request, portMAX_DELAY);
-    return;
-  }
-  
   if(type == NEWMODE) {
     if(payload == STATIONS) {
       _isStationsChanging = true;
@@ -518,9 +484,6 @@ void Display::_layoutChange(bool played){
       if(_weather) _weather->moveBack();
     }
   }else{
-    // При выключенном vumeter принудительно отключаем оба виджета
-    if(_spectrumwidget) _spectrumwidget->setActive(false, true);
-    if(_vuwidget) _vuwidget->lock(true);
     if(played){
       if(_weather) _weather->moveTo(weatherMove);
       _clock.moveBack();
@@ -531,7 +494,7 @@ void Display::_layoutChange(bool played){
   }
 }
 #ifndef DSP_QUEUE_TICKS
-  #define DSP_QUEUE_TICKS pdMS_TO_TICKS(10)
+  #define DSP_QUEUE_TICKS 0
 #endif
 void Display::loop() {
   if(_bootStep==0) {
@@ -539,15 +502,7 @@ void Display::loop() {
     _bootScreen();
     return;
   }
-  // Не сбрасываем _bootStep если мы уже в AP режиме или нормальном режиме
-  if(_bootStep >= 2) {
-    // Уже инициализированы, не нужно повторно вызывать _bootScreen
-  }
   if(displayQueue==NULL) return;
-  static int loopCount = 0;
-  if(loopCount++ < 5) {
-    Serial.printf("[Display] loop() count=%d, _bootStep=%d\n", loopCount, _bootStep);
-  }
   _pager.loop();
   if(!_suspendFlush){
     sdog.takeMutex();
@@ -588,7 +543,16 @@ void Display::loop() {
           break;
         case AUDIOINFO: if(_heapbar)  { _heapbar->lock(!config.store.audioinfo); _heapbar->setValue(player.inBufferFilled()); } break;
         case SHOWVUMETER: {
-          // Переключение виджетов выполняется в _layoutChange()
+          // Сначала деактивируем оба, затем активируем нужный
+          if(_spectrumwidget) _spectrumwidget->setActive(false, true);
+          if(_vuwidget) _vuwidget->lock(true);
+          if(config.store.vumeter){
+            if(config.store.usespectrum){
+              if(_spectrumwidget) _spectrumwidget->setActive(true);
+            }else{
+              if(_vuwidget) _vuwidget->unlock();
+            }
+          }
           _layoutChange(player.isRunning());
           break;
         }
@@ -627,10 +591,7 @@ void Display::loop() {
         case DSPRSSI: if(_rssi){ _setRSSI(request.payload); } if (_heapbar && config.store.audioinfo) _heapbar->setValue(player.isRunning()?player.inBufferFilled():0); break;
         case PSTART: _layoutChange(true);   break;
         case PSTOP:  _layoutChange(false);  break;
-        case DSP_START: 
-          Serial.println("[Display] Processing DSP_START request");
-          _start();  
-          break;
+        case DSP_START: _start();  break;
         case NEWIP: {
           #ifndef HIDE_IP
             if(_volip) _volip->setText(WiFi.localIP().toString().c_str(), iptxtFmt);
