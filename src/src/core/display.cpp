@@ -132,6 +132,10 @@ void Display::_bootScreen(){
   _pager.setPage(_boot, true);
   dsp.drawLogo(bootLogoTop);
   _bootStep = 1;
+  
+  // Разрешаем flush для анимации bootScreen
+  _suspendFlush = false;
+  Serial.println("[Display] Boot screen created, flush enabled for animation");
 }
 
 void Display::_buildPager(){
@@ -509,9 +513,9 @@ void Display::loop() {
   if(_bootStep==0) {
     _pager.begin();
     _bootScreen();
-    return;
+    // Не выходим сразу - нужно вызвать _pager.loop() для рендеринга виджетов
   }
-  if(displayQueue==NULL) return;
+  if(displayQueue==NULL && _bootStep!=1) return; // Разрешаем loop при bootStep==1
   _pager.loop();
   if(!_suspendFlush){
     sdog.takeMutex();
