@@ -1,4 +1,9 @@
 # Yoradio для ESP32-4848S040 (ST7701 RGB 480x480)
+Дальнейшее развитие этого проекта будет тут
+
+Further development of this project will be here 
+
+https://github.com/Witaliy76/Yoradio_RGB_Panel
 
 **Ветка:** `4848S040`  
 **Версия:** v0.9.434(m)  
